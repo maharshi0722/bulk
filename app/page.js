@@ -247,6 +247,11 @@ export default function Page() {
   }
 
   async function downloadPNG() {
+    if (!isFormComplete) {
+      showToast("Please enter username, name and at least one role first");
+      return;
+    }
+
     if (!cardRef.current) return;
     setLoading(true);
     try {
@@ -267,7 +272,13 @@ export default function Page() {
   }
 
   async function copyShareLink() {
-    const url = window.location.href;
+    const base = "https://bulk-six.vercel.app";
+    const params = new URLSearchParams();
+    if (handle) params.set("u", handle);
+    if (manualName.trim()) params.set("name", manualName.trim());
+    if (regionalRole) params.set("region", regionalRole);
+    const url = `${base}${params.toString() ? `/?${params.toString()}` : "/"}`;
+
     try {
       await navigator.clipboard.writeText(url);
       showToast("Share link copied ✅");
@@ -277,22 +288,18 @@ export default function Page() {
     }
   }
 
-  // New: simplified cross-platform share to X (no image attachment)
-  async function shareToXWithoutImage() {
-    // builds a tweet text and opens X/Twitter composer; uses navigator.share where supported
-    const origin = typeof window !== "undefined" ? window.location.origin : "";
-    const cardLink = window.location.href || (origin ? `${origin}/?u=${encodeURIComponent(handle || "")}` : "");
+  // Share without image attachment (text + link)
+async function shareToXWithoutImage() {
+  const badges = [
+    statusRoles.verified ? "Verified" : null,
+    statusRoles.bulker ? "Bulker" : null,
+    statusRoles.lvl2 ? "Lvl 2" : null,
+    statusRoles.og ? "OG" : null,
+    statusRoles.contributor ? "Contributor" : null,
+    regionalRole ? `Region: ${regionalRole}` : null,
+  ].filter(Boolean);
 
-    const badges = [
-      statusRoles.verified ? "Verified" : null,
-      statusRoles.bulker ? "Bulker" : null,
-      statusRoles.lvl2 ? "Lvl 2" : null,
-      statusRoles.og ? "OG" : null,
-      statusRoles.contributor ? "Contributor" : null,
-      regionalRole ? `Region: ${regionalRole}` : null,
-    ].filter(Boolean);
-
-    const tweetText = `Just minted my BULK Access Card 🪪
+  const tweetText = `Just minted my BULK Access Card 🪪
 
 ${badges.length ? badges.join(" • ") + "\n\n" : ""}BULK - One Exchange
 Infinite Markets
@@ -300,47 +307,42 @@ Infinite Markets
 Get yours: bulk-six.vercel.app
 #BULK`;
 
-    setLoading(true);
-    try {
-      // Prefer navigator.share (mobile native share) if available
-      if (navigator.share) {
-        try {
-          await navigator.share({
-            title: "BULK Access Card",
-            text: tweetText,
-            url: cardLink,
-          });
-          showToast("Shared via native share ✅");
-          setLoading(false);
-          return;
-        } catch (err) {
-          // If user cancels or share fails, fall back to tweet intent
-          console.warn("navigator.share failed or cancelled:", err);
-        }
+  setLoading(true);
+  try {
+    // ✅ Mobile native share (TEXT ONLY, no url)
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "BULK Access Card",
+          text: tweetText,
+          // ❌ remove url: ...
+        });
+        showToast("Shared via native share ✅");
+        return;
+      } catch (err) {
+        console.warn("navigator.share failed or cancelled:", err);
       }
-
-      // Build Twitter/X intent URL with both text and url parameters (improves parsing)
-      const intentUrl =
-        "https://twitter.com/intent/tweet?text=" +
-        encodeURIComponent(tweetText) +
-        "&url=" +
-        encodeURIComponent(cardLink);
-
-      // On mobile open in same tab where possible (safer for some in-app browsers), else new tab
-      window.open(intentUrl, "_blank", "noopener,noreferrer");
-      showToast("Opened X composer");
-    } catch (err) {
-      console.error("shareToXWithoutImage error:", err);
-      showToast("Share failed ❌");
-    } finally {
-      setLoading(false);
     }
-  }
 
-  // Legacy shareCard kept but simplified: attempts native share then opens tweet intent (no image)
-  async function shareCard() {
-    return shareToXWithoutImage();
+    // ✅ X intent (TEXT ONLY, no &url=)
+    const intentUrl =
+      "https://twitter.com/intent/tweet?text=" + encodeURIComponent(tweetText);
+
+    window.open(intentUrl, "_blank", "noopener,noreferrer");
+    showToast("Opened X composer");
+  } catch (err) {
+    console.error("shareToXWithoutImage error:", err);
+    showToast("Share failed ❌");
+  } finally {
+    setLoading(false);
   }
+}
+
+// Legacy shareCard
+async function shareCard() {
+  return shareToXWithoutImage();
+}
+
 
   const xVerified = !!xProfile?.verified;
 
@@ -351,6 +353,10 @@ Get yours: bulk-six.vercel.app
   const selectedRegion = REGIONAL_ROLES.find((r) => r.label === regionalRole);
 
   const finalName = manualName.trim() || xProfile?.name || "BULK Trader";
+
+  // New: require handle + manualName + at least one role (status or regional) to show access card
+  const hasStatusRoleSelected = Object.values(statusRoles).some(Boolean);
+  const isFormComplete = Boolean(handle && manualName.trim() && (hasStatusRoleSelected || regionalRole));
 
   return (
     <main className="min-h-screen bg-[#070A12] text-white">
@@ -369,7 +375,6 @@ Get yours: bulk-six.vercel.app
           <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
             Enter username, pick roles, generate your card
           </h1>
-
         </header>
 
         <div className="grid gap-6 md:grid-cols-2">
@@ -400,7 +405,7 @@ Get yours: bulk-six.vercel.app
                   ) : xProfile ? (
                     <span className="text-emerald-300/80">Loaded: {xProfile.name} (@{xProfile.username})</span>
                   ) : (
-                    <span className="text-white/45"></span>
+                    <span className="text-white/45">Enter username and name to preview the card</span>
                   )}
                 </div>
               </div>
@@ -413,7 +418,7 @@ Get yours: bulk-six.vercel.app
                   placeholder="e.g. Maharshi"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-white outline-none focus:border-white/20"
                 />
-                <p className="mt-2 text-xs text-white/45">If filled, this name shows on the card (overrides X name).</p>
+                <p className="mt-2 text-xs text-white/45">This name must be filled to show the access card preview.</p>
               </div>
 
               <div>
@@ -459,6 +464,9 @@ Get yours: bulk-six.vercel.app
                     );
                   })}
                 </div>
+                <p className="mt-2 text-xs text-white/45">
+                  You must select at least one status role or a regional role to preview the card.
+                </p>
               </div>
 
               <div>
@@ -488,24 +496,27 @@ Get yours: bulk-six.vercel.app
                     })}
                   </div>
                 </div>
-
-                <p className="mt-2 text-xs text-white/45">One regional role at a time (like Discord reaction roles).</p>
               </div>
 
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 pt-1">
                 <button
                   onClick={downloadPNG}
-                  disabled={loading}
+                  disabled={loading || !isFormComplete}
                   className="block w-full sm:w-auto rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-60"
                 >
                   {loading ? "Exporting..." : "Download PNG"}
                 </button>
 
-     
+                <button
+                  onClick={copyShareLink}
+                  className="block w-full sm:w-auto rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm text-white/85 hover:bg-white/10"
+                >
+                  Copy Share Link
+                </button>
 
                 <button
                   onClick={shareCard}
-                  disabled={loading}
+                  disabled={loading || !isFormComplete}
                   className="block w-full sm:w-auto rounded-2xl border border-white/15 bg-white/5 px-5 py-3 text-sm text-white/85 hover:bg-white/10 disabled:opacity-60"
                 >
                   Share on X (text + link)
@@ -515,73 +526,84 @@ Get yours: bulk-six.vercel.app
           </section>
 
           <section className="flex flex-col items-center justify-start">
-            <div
-              ref={cardRef}
-              className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 bg-gradient-to-br from-white/10 via-white/5 to-white/10 p-4 sm:p-6 shadow-2xl"
-            >
-              <div className="pointer-events-none absolute inset-0">
-                  <img
-    src="/7-pray.png"
-    alt=""
-    className="h-full w-full object-cover opacity-25"
-    crossOrigin="anonymous"
-    referrerPolicy="no-referrer"
-  />
-                <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
-                <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
+            {!isFormComplete ? (
+              // Placeholder shown until form is complete
+              <div className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/10 bg-white/3 p-8 text-center">
+                <div className="mb-4 text-xl font-semibold">Access Card Preview</div>
+                <div className="text-sm text-white/60">
+                  Enter your username, display name and select at least one role to see the card preview.
+                </div>
               </div>
+            ) : (
+              // Actual card preview shown only when form is complete
+              <div
+                ref={cardRef}
+                className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 bg-gradient-to-br from-white/10 via-white/5 to-white/10 p-4 sm:p-6 shadow-2xl"
+              >
+                <div className="pointer-events-none absolute inset-0">
+                  <img
+                    src="/7-pray.png"
+                    alt=""
+                    className="h-full w-full object-cover opacity-25"
+                    crossOrigin="anonymous"
+                    referrerPolicy="no-referrer"
+                  />
+                  <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
+                  <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
+                </div>
 
-              <div className="relative">
-                <div className="flex items-start justify-between gap-3 pr-1">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <Avatar handleOrName={handle || finalName} profileImageUrl={xProfile?.profile_image_url || null} />
-                    <div className="min-w-0">
-                      <div className="text-xs text-white/60">BULK TRADE</div>
-                      <div className="truncate text-base sm:text-lg font-semibold leading-tight">{finalName}</div>
-                      <div className="truncate text-sm text-white/70">@{handle || "guest"}</div>
+                <div className="relative">
+                  <div className="flex items-start justify-between gap-3 pr-1">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar handleOrName={handle || finalName} profileImageUrl={xProfile?.profile_image_url || null} />
+                      <div className="min-w-0">
+                        <div className="text-xs text-white/60">BULK TRADE</div>
+                        <div className="truncate text-base sm:text-lg font-semibold leading-tight">{finalName}</div>
+                        <div className="truncate text-sm text-white/70">@{handle || "guest"}</div>
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <div className="text-xs text-white/50">CARD ID</div>
+                      <div className="font-mono text-sm text-white/80">{cardId}</div>
                     </div>
                   </div>
 
-                  <div className="text-right">
-                    <div className="text-xs text-white/50">CARD ID</div>
-                    <div className="font-mono text-sm text-white/80">{cardId}</div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {activeStatusLabels.map((label) => (
+                      <Badge key={label}>{label}</Badge>
+                    ))}
+                    {regionalRole ? <Badge>{selectedRegion ? `${selectedRegion.emoji} ${selectedRegion.label}` : regionalRole}</Badge> : null}
                   </div>
-                </div>
 
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {activeStatusLabels.map((label) => (
-                    <Badge key={label}>{label}</Badge>
-                  ))}
-                  {regionalRole ? <Badge>{selectedRegion ? `${selectedRegion.emoji} ${selectedRegion.label}` : regionalRole}</Badge> : null}
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
-                  <div className="text-xs text-white/50">ACCESS NOTE</div>
-                  <div className="mt-2 text-sm text-white/80">
-                    <span className="font-semibold">BULK</span> - One Exchange
-                    <br />
-                    Infinite Markets
+                  <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
+                    <div className="text-xs text-white/50">ACCESS NOTE</div>
+                    <div className="mt-2 text-sm text-white/80">
+                      <span className="font-semibold">BULK</span> - One Exchange
+                      <br />
+                      Infinite Markets
+                    </div>
                   </div>
-                </div>
 
-                <div className="mt-4 flex items-end justify-between">
-                  <div>
-                    <div className="text-xs text-white/50">ISSUED</div>
-                    <div className="text-sm text-white/80">{issueDate}</div>
+                  <div className="mt-4 flex items-end justify-between">
+                    <div>
+                      <div className="text-xs text-white/50">ISSUED</div>
+                      <div className="text-sm text-white/80">{issueDate}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-white/50">STATUS</div>
+                      <div className="text-sm font-medium text-white/85">ACTIVE</div>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-white/50">STATUS</div>
-                    <div className="text-sm font-medium text-white/85">ACTIVE</div>
-                  </div>
-                </div>
 
-                <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
-                  <div className="text-xs text-white/50">bulktrade</div>
-                  <div className="text-xs text-white/60">Shareable Access Card</div>
+                  <div className="mt-3 flex items-center justify-between border-t border-white/10 pt-3">
+                    <div className="text-xs text-white/50">bulktrade</div>
+                    <div className="text-xs text-white/60">Shareable Access Card</div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             <p className="mt-3 text-center text-xs text-white/45">Tip: choose roles on the left like Discord, then download/share.</p>
           </section>
