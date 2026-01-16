@@ -111,6 +111,35 @@ const STATUS_ROLES = [
   { key: "contributor", label: "Contributor" },
 ];
 
+// ✅ FIX: preload /7-pray.png as dataURL so html-to-image ALWAYS includes it in export
+function usePreloadedBg(src) {
+  const [bgDataUrl, setBgDataUrl] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch(src, { cache: "force-cache" });
+        const blob = await res.blob();
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          if (!cancelled) setBgDataUrl(String(reader.result || ""));
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) {
+        console.warn("bg preload failed", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  return bgDataUrl;
+}
+
 export default function Page() {
   const cardRef = useRef(null);
 
@@ -137,6 +166,9 @@ export default function Page() {
 
   const cardId = useMemo(() => makeId(handle), [handle]);
   const issueDate = useMemo(() => formatDate(new Date()), []);
+
+  // ✅ preload card bg for export
+  const bgDataUrl = usePreloadedBg("/7-pray.png");
 
   // read params
   useEffect(() => {
@@ -218,33 +250,34 @@ export default function Page() {
     };
   }, [handle]);
 
-  // Ensure the card includes the 7-pray background (use <img> with crossOrigin)
+  // ✅ FIX: wait for bg + fonts + a paint frame before export
   async function generatePngBlob() {
     if (!cardRef.current) throw new Error("No card to render");
 
-    try {
-      const dataUrl = await toPng(cardRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#070A12",
-        skipFonts: true,
-      });
-      const res = await fetch(dataUrl);
-      return await res.blob();
-    } catch (err) {
-      try {
-        const dataUrl = await toPng(cardRef.current, {
-          cacheBust: true,
-          pixelRatio: 2,
-          backgroundColor: "#070A12",
-          skipFonts: false,
-        });
-        const res = await fetch(dataUrl);
-        return await res.blob();
-      } catch (err2) {
-        throw err2;
-      }
+    // wait bg (max 1.5s)
+    const start = Date.now();
+    while (!bgDataUrl && Date.now() - start < 1500) {
+      await new Promise((r) => setTimeout(r, 50));
     }
+
+    // wait fonts (helps iOS)
+    try {
+      if (document.fonts?.ready) await document.fonts.ready;
+    } catch {}
+
+    // wait 1 frame so bg paints
+    await new Promise((r) => requestAnimationFrame(() => r()));
+
+    // render
+    const dataUrl = await toPng(cardRef.current, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor: "transparent",
+      skipFonts: true,
+    });
+
+    const res = await fetch(dataUrl);
+    return await res.blob();
   }
 
   function triggerDownload(blobOrUrl, filename) {
@@ -264,13 +297,11 @@ export default function Page() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  // New: download both composite card PNG (includes 7-pray background) and the background file
-  async function downloadBoth() {
+  async function downloadCard() {
     if (!isFormComplete) {
       showToast("Please enter username, name and select a region first");
       return;
     }
-
     if (!cardRef.current) {
       showToast("Nothing to download");
       return;
@@ -278,24 +309,9 @@ export default function Page() {
 
     setLoading(true);
     try {
-      // composite PNG (card + background)
       const compositeBlob = await generatePngBlob();
       triggerDownload(compositeBlob, `bulk-access-card-${handle || "guest"}.png`);
-
-      // fetch background image separately and download it
-      try {
-        const bgResp = await fetch("/7-pray.png", { cache: "no-cache" });
-        if (bgResp.ok) {
-          const bgBlob = await bgResp.blob();
-          triggerDownload(bgBlob, `bulk-background-7-pray.png`);
-        } else {
-          console.warn("Background fetch failed:", bgResp.status);
-        }
-      } catch (bgErr) {
-        console.warn("Background fetch error:", bgErr);
-      }
-
-      showToast("Downloaded card + background ✅");
+      showToast("Downloaded card ✅");
     } catch (e) {
       console.error(e);
       showToast("Download failed ❌");
@@ -321,7 +337,6 @@ export default function Page() {
     }
   }
 
-  // Share without image attachment (text + link)
   async function shareToXWithoutImage() {
     if (!isFormComplete) {
       showToast("Please enter username, name and select a region first");
@@ -347,7 +362,6 @@ Get yours: https://bulk-six.vercel.app
 
     setLoading(true);
     try {
-      // navigator.share (mobile) prefers text + url — keep this simple
       if (navigator.share) {
         try {
           await navigator.share({
@@ -356,7 +370,6 @@ Get yours: https://bulk-six.vercel.app
             url: `https://bulk-six.vercel.app/?u=${encodeURIComponent(handle || "")}`,
           });
           showToast("Shared via native share ✅");
-          setLoading(false);
           return;
         } catch (err) {
           console.warn("navigator.share failed or cancelled:", err);
@@ -385,10 +398,8 @@ Get yours: https://bulk-six.vercel.app
   ).map((r) => r.label);
 
   const selectedRegion = REGIONAL_ROLES.find((r) => r.label === regionalRole);
-
   const finalName = manualName.trim() || xProfile?.name || "BULK Trader";
 
-  // enforce: username + manual name + regional role are required to show the access card
   const isFormComplete = Boolean(handle && manualName.trim() && regionalRole);
 
   return (
@@ -401,6 +412,7 @@ Get yours: https://bulk-six.vercel.app
       <div className="relative mx-auto max-w-5xl px-4 py-6 sm:px-6 md:py-10">
         <header className="mb-6 flex flex-col gap-2 ">
           <div className="inline-flex items-center gap-3 ">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src="/logo.png" alt="BULK" className="h-10 w-auto rounded-xl" />
             <span className="text-sm text-white/60">Access Card Generator</span>
           </div>
@@ -436,7 +448,9 @@ Get yours: https://bulk-six.vercel.app
                   ) : profileErr ? (
                     <span className="text-red-300/80">{profileErr}</span>
                   ) : xProfile ? (
-                    <span className="text-emerald-300/80">Loaded: {xProfile.name} (@{xProfile.username})</span>
+                    <span className="text-emerald-300/80">
+                      Loaded: {xProfile.name} (@{xProfile.username})
+                    </span>
                   ) : (
                     <span className="text-white/45">Enter username, display name and select a region to preview card</span>
                   )}
@@ -451,7 +465,9 @@ Get yours: https://bulk-six.vercel.app
                   placeholder="e.g. Maharshi"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-white outline-none focus:border-white/20"
                 />
-                <p className="mt-2 text-xs text-white/45">This must be filled and a region selected to show the access card preview.</p>
+                <p className="mt-2 text-xs text-white/45">
+                  This must be filled and a region selected to show the access card preview.
+                </p>
               </div>
 
               <div>
@@ -476,8 +492,7 @@ Get yours: https://bulk-six.vercel.app
 
                 <div className="flex flex-wrap gap-2">
                   {STATUS_ROLES.map((r) => {
-                    const active =
-                      r.key === "verified" ? statusRoles.verified || xVerified : !!statusRoles[r.key];
+                    const active = r.key === "verified" ? statusRoles.verified || xVerified : !!statusRoles[r.key];
 
                     return (
                       <TogglePill
@@ -497,6 +512,7 @@ Get yours: https://bulk-six.vercel.app
                     );
                   })}
                 </div>
+
                 <p className="mt-2 text-xs text-white/45">
                   Status roles are optional — you still must choose a regional role to preview the card.
                 </p>
@@ -533,11 +549,11 @@ Get yours: https://bulk-six.vercel.app
 
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 pt-1">
                 <button
-                  onClick={downloadBoth}
+                  onClick={downloadCard}
                   disabled={loading || !isFormComplete}
                   className="block w-full sm:w-auto rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-60"
                 >
-                  {loading ? "Exporting..." : "Download Card"}
+                  {loading ? "Exporting..." : "Download Card (with BG)"}
                 </button>
 
                 <button
@@ -573,14 +589,15 @@ Get yours: https://bulk-six.vercel.app
                 className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 p-4 sm:p-6 shadow-2xl"
                 style={{ backgroundColor: "transparent" }}
               >
-                {/* Put the background image as an actual <img> (with crossOrigin)
-                    so html-to-image picks it up reliably. */}
-                <img
-                  src="/7-pray.png"
-                  alt="background"
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-100"
-                  crossOrigin="anonymous"
-                  referrerPolicy="no-referrer"
+                {/* ✅ BG is embedded dataURL (reliable export) */}
+                <div
+                  className="pointer-events-none absolute inset-0"
+                  style={{
+                    backgroundImage: `url(${bgDataUrl || "/7-pray.png"})`,
+                    backgroundSize: "cover",
+                    backgroundPosition: "center",
+                    backgroundRepeat: "no-repeat",
+                  }}
                 />
 
                 {/* dark overlay so text is readable */}
@@ -614,7 +631,11 @@ Get yours: https://bulk-six.vercel.app
                     {activeStatusLabels.map((label) => (
                       <Badge key={label}>{label}</Badge>
                     ))}
-                    {regionalRole ? <Badge>{selectedRegion ? `${selectedRegion.emoji} ${selectedRegion.label}` : regionalRole}</Badge> : null}
+                    {regionalRole ? (
+                      <Badge>
+                        {selectedRegion ? `${selectedRegion.emoji} ${selectedRegion.label}` : regionalRole}
+                      </Badge>
+                    ) : null}
                   </div>
 
                   <div className="mt-4 rounded-2xl border border-white/10 bg-black/20 p-3">
@@ -645,7 +666,9 @@ Get yours: https://bulk-six.vercel.app
               </div>
             )}
 
-            <p className="mt-3 text-center text-xs text-white/45">Tip: choose a regional role to reveal the card, then download/share.</p>
+            <p className="mt-3 text-center text-xs text-white/45">
+              Tip: choose a regional role to reveal the card, then download/share.
+            </p>
           </section>
         </div>
 
