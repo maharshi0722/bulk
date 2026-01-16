@@ -366,8 +366,8 @@ async function shareCard() {
       </div>
 
       <div className="relative mx-auto max-w-5xl px-4 py-6 sm:px-6 md:py-10">
-        <header className="mb-6 flex flex-col gap-2">
-          <div className="inline-flex items-center gap-3">
+        <header className="mb-6 flex flex-col gap-2 ">
+          <div className="inline-flex items-center gap-3 ">
             <img src="/logo.png" alt="BULK" className="h-10 w-auto rounded-xl" />
             <span className="text-sm text-white/60">Access Card Generator</span>
           </div>
@@ -536,22 +536,25 @@ async function shareCard() {
               </div>
             ) : (
               // Actual card preview shown only when form is complete
-              <div
-                ref={cardRef}
-                className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 bg-gradient-to-br from-white/10 via-white/5 to-white/10 p-4 sm:p-6 shadow-2xl"
-              >
-                <div className="pointer-events-none absolute inset-0">
-                  <img
-                    src="/7-pray.png"
-                    alt=""
-                    className="h-full w-full object-cover opacity-25"
-                    crossOrigin="anonymous"
-                    referrerPolicy="no-referrer"
-                  />
-                  <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
-                  <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
-                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
-                </div>
+            <div
+  ref={cardRef}
+  className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 p-4 sm:p-6 shadow-2xl"
+  style={{
+    backgroundImage: "url(/card.png)",
+    backgroundSize: "cover",
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+  }}
+>
+  {/* dark overlay so text is readable */}
+  <div className="pointer-events-none absolute inset-0 bg-black/40" />
+
+  {/* glow overlays */}
+  <div className="pointer-events-none absolute inset-0">
+    <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
+    <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
+    <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
+  </div>
 
                 <div className="relative">
                   <div className="flex items-start justify-between gap-3 pr-1">
