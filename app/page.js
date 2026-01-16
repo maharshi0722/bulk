@@ -218,6 +218,10 @@ export default function Page() {
     };
   }, [handle]);
 
+  // Ensure the card includes the 7-pray background (use <img> with crossOrigin)
+  // and implement downloadBoth to download both files:
+  //  - composite PNG (card + bg)
+  //  - the standalone background image (7-pray.png)
   async function generatePngBlob() {
     if (!cardRef.current) throw new Error("No card to render");
 
@@ -246,23 +250,56 @@ export default function Page() {
     }
   }
 
-  async function downloadPNG() {
+  function triggerDownload(blobOrUrl, filename) {
+    if (!blobOrUrl) return;
+    if (typeof blobOrUrl === "string") {
+      const a = document.createElement("a");
+      a.href = blobOrUrl;
+      a.download = filename;
+      a.click();
+      return;
+    }
+    const url = URL.createObjectURL(blobOrUrl);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  // New: download both composite card PNG (includes 7-pray background) and the background file
+  async function downloadBoth() {
     if (!isFormComplete) {
       showToast("Please enter username, name and at least one role first");
       return;
     }
 
-    if (!cardRef.current) return;
+    if (!cardRef.current) {
+      showToast("Nothing to download");
+      return;
+    }
+
     setLoading(true);
     try {
-      const blob = await generatePngBlob();
-      const dataUrl = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.download = `bulk-access-card-${handle || "guest"}.png`;
-      link.href = dataUrl;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(dataUrl), 5000);
-      showToast("Downloaded PNG ✅");
+      // 1) composite PNG (card + background)
+      const compositeBlob = await generatePngBlob();
+      triggerDownload(compositeBlob, `bulk-access-card-${handle || "guest"}.png`);
+
+      // 2) fetch background image separately and download it
+      // note: path is /7-pray.png as used in the preview
+      try {
+        const bgResp = await fetch("/7-pray.png", { cache: "no-cache" });
+        if (bgResp.ok) {
+          const bgBlob = await bgResp.blob();
+          triggerDownload(bgBlob, `bulk-background-7-pray.png`);
+        } else {
+          console.warn("Background fetch failed:", bgResp.status);
+        }
+      } catch (bgErr) {
+        console.warn("Background fetch error:", bgErr);
+      }
+
+      showToast("Downloaded card + background ✅");
     } catch (e) {
       console.error(e);
       showToast("Download failed ❌");
@@ -289,60 +326,56 @@ export default function Page() {
   }
 
   // Share without image attachment (text + link)
-async function shareToXWithoutImage() {
-  const badges = [
-    statusRoles.verified ? "Verified" : null,
-    statusRoles.bulker ? "Bulker" : null,
-    statusRoles.lvl2 ? "Lvl 2" : null,
-    statusRoles.og ? "OG" : null,
-    statusRoles.contributor ? "Contributor" : null,
-    regionalRole ? `Region: ${regionalRole}` : null,
-  ].filter(Boolean);
+  async function shareToXWithoutImage() {
+    const badges = [
+      statusRoles.verified ? "Verified" : null,
+      statusRoles.bulker ? "Bulker" : null,
+      statusRoles.lvl2 ? "Lvl 2" : null,
+      statusRoles.og ? "OG" : null,
+      statusRoles.contributor ? "Contributor" : null,
+      regionalRole ? `Region: ${regionalRole}` : null,
+    ].filter(Boolean);
 
-  const tweetText = `Just minted my BULK Access Card 🪪
+    const tweetText = `Just minted my BULK Access Card 🪪
 
 ${badges.length ? badges.join(" • ") + "\n\n" : ""}BULK - One Exchange
 Infinite Markets
 
-Get yours: bulk-six.vercel.app
+Get yours: https://bulk-six.vercel.app
 #BULK`;
 
-  setLoading(true);
-  try {
-    // ✅ Mobile native share (TEXT ONLY, no url)
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: "BULK Access Card",
-          text: tweetText,
-          // ❌ remove url: ...
-        });
-        showToast("Shared via native share ✅");
-        return;
-      } catch (err) {
-        console.warn("navigator.share failed or cancelled:", err);
+    setLoading(true);
+    try {
+      // navigator.share (mobile) prefers text + url — but we keep this simple
+      if (navigator.share) {
+        try {
+          await navigator.share({
+            title: "BULK Access Card",
+            text: tweetText,
+            url: `https://bulk-six.vercel.app/?u=${encodeURIComponent(handle || "")}`,
+          });
+          showToast("Shared via native share ✅");
+          setLoading(false);
+          return;
+        } catch (err) {
+          console.warn("navigator.share failed or cancelled:", err);
+        }
       }
+
+      const intentUrl = "https://twitter.com/intent/tweet?text=" + encodeURIComponent(tweetText);
+      window.open(intentUrl, "_blank", "noopener,noreferrer");
+      showToast("Opened X composer");
+    } catch (err) {
+      console.error("shareToXWithoutImage error:", err);
+      showToast("Share failed ❌");
+    } finally {
+      setLoading(false);
     }
-
-    // ✅ X intent (TEXT ONLY, no &url=)
-    const intentUrl =
-      "https://twitter.com/intent/tweet?text=" + encodeURIComponent(tweetText);
-
-    window.open(intentUrl, "_blank", "noopener,noreferrer");
-    showToast("Opened X composer");
-  } catch (err) {
-    console.error("shareToXWithoutImage error:", err);
-    showToast("Share failed ❌");
-  } finally {
-    setLoading(false);
   }
-}
 
-// Legacy shareCard
-async function shareCard() {
-  return shareToXWithoutImage();
-}
-
+  async function shareCard() {
+    return shareToXWithoutImage();
+  }
 
   const xVerified = !!xProfile?.verified;
 
@@ -354,7 +387,7 @@ async function shareCard() {
 
   const finalName = manualName.trim() || xProfile?.name || "BULK Trader";
 
-  // New: require handle + manualName + at least one role (status or regional) to show access card
+  // require handle + manualName + at least one role (status or regional)
   const hasStatusRoleSelected = Object.values(statusRoles).some(Boolean);
   const isFormComplete = Boolean(handle && manualName.trim() && (hasStatusRoleSelected || regionalRole));
 
@@ -405,7 +438,7 @@ async function shareCard() {
                   ) : xProfile ? (
                     <span className="text-emerald-300/80">Loaded: {xProfile.name} (@{xProfile.username})</span>
                   ) : (
-                    <span className="text-white/45">Enter username and name to preview the card</span>
+                    <span className="text-white/45">Enter username, display name and select roles to preview card</span>
                   )}
                 </div>
               </div>
@@ -418,7 +451,7 @@ async function shareCard() {
                   placeholder="e.g. Maharshi"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-white outline-none focus:border-white/20"
                 />
-                <p className="mt-2 text-xs text-white/45">This name must be filled to show the access card preview.</p>
+                <p className="mt-2 text-xs text-white/45">This must be filled to show the access card preview.</p>
               </div>
 
               <div>
@@ -465,7 +498,7 @@ async function shareCard() {
                   })}
                 </div>
                 <p className="mt-2 text-xs text-white/45">
-                  You must select at least one status role or a regional role to preview the card.
+                  Select at least one status role or a regional role to preview the card.
                 </p>
               </div>
 
@@ -500,11 +533,11 @@ async function shareCard() {
 
               <div className="flex flex-col sm:flex-row sm:flex-wrap gap-3 pt-1">
                 <button
-                  onClick={downloadPNG}
+                  onClick={downloadBoth}
                   disabled={loading || !isFormComplete}
                   className="block w-full sm:w-auto rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-60"
                 >
-                  {loading ? "Exporting..." : "Download PNG"}
+                  {loading ? "Exporting..." : "Download Card"}
                 </button>
 
                 <button
@@ -525,9 +558,9 @@ async function shareCard() {
             </div>
           </section>
 
+          {/* Preview */}
           <section className="flex flex-col items-center justify-start">
             {!isFormComplete ? (
-              // Placeholder shown until form is complete
               <div className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/10 bg-white/3 p-8 text-center">
                 <div className="mb-4 text-xl font-semibold">Access Card Preview</div>
                 <div className="text-sm text-white/60">
@@ -535,26 +568,30 @@ async function shareCard() {
                 </div>
               </div>
             ) : (
-              // Actual card preview shown only when form is complete
-            <div
-  ref={cardRef}
-  className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 p-4 sm:p-6 shadow-2xl"
-  style={{
-    backgroundImage: "url(/card.png)",
-    backgroundSize: "cover",
-    backgroundPosition: "center",
-    backgroundRepeat: "no-repeat",
-  }}
->
-  {/* dark overlay so text is readable */}
-  <div className="pointer-events-none absolute inset-0 bg-black/40" />
+              <div
+                ref={cardRef}
+                className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 p-4 sm:p-6 shadow-2xl"
+                style={{ backgroundColor: "transparent" }}
+              >
+                {/* Put the background image as an actual <img> (with crossOrigin)
+                    so html-to-image picks it up reliably. */}
+                <img
+                  src="/7-pray.png"
+                  alt="background"
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-100"
+                  crossOrigin="anonymous"
+                  referrerPolicy="no-referrer"
+                />
 
-  {/* glow overlays */}
-  <div className="pointer-events-none absolute inset-0">
-    <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
-    <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
-    <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
-  </div>
+                {/* dark overlay so text is readable */}
+                <div className="pointer-events-none absolute inset-0 bg-black/40" />
+
+                {/* glow overlays */}
+                <div className="pointer-events-none absolute inset-0">
+                  <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
+                  <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
+                  <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.10),transparent_45%)]" />
+                </div>
 
                 <div className="relative">
                   <div className="flex items-start justify-between gap-3 pr-1">
