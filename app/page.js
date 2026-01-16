@@ -297,7 +297,7 @@ export default function Page() {
 ${badges.length ? badges.join(" • ") + "\n\n" : ""}BULK - One Exchange
 Infinite Markets
 
-Get yours: ${cardLink}
+Get yours: bulk-six.vercel.app
 #BULK`;
 
     setLoading(true);
