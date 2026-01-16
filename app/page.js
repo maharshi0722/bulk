@@ -170,7 +170,7 @@ export default function Page() {
     window.history.replaceState(null, "", newUrl);
   }, [handle, manualName, regionalRole]);
 
-  function showToast(msg, duration = 2200) {
+  function showToast(msg, duration = 2000) {
     setToast(msg);
     window.setTimeout(() => setToast(null), duration);
   }
@@ -218,62 +218,38 @@ export default function Page() {
     };
   }, [handle]);
 
-  // Wait for images inside the card to finish loading before calling html-to-image.
-  // This avoids Safari/html-to-image failing due to images not ready.
-  function waitForImages(root, timeout = 4000) {
-    return new Promise((resolve) => {
-      if (!root) return resolve();
-      const imgs = Array.from(root.querySelectorAll("img"));
-      if (!imgs.length) return resolve();
-      let settled = 0;
-      const onSettled = () => {
-        settled += 1;
-        if (settled === imgs.length) resolve();
-      };
-      imgs.forEach((img) => {
-        if (img.complete) return onSettled();
-        const t1 = () => {
-          img.removeEventListener("load", t1);
-          img.removeEventListener("error", t1);
-          onSettled();
-        };
-        img.addEventListener("load", t1);
-        img.addEventListener("error", t1);
-      });
-      // safety timeout
-      setTimeout(resolve, timeout);
-    });
-  }
-
-  // Return a dataURL for the card PNG (tries Safari-friendly options)
-  async function generatePngDataUrl() {
+  // Ensure the card includes the 7-pray background (use <img> with crossOrigin)
+  async function generatePngBlob() {
     if (!cardRef.current) throw new Error("No card to render");
-    // ensure images loaded inside card
-    await waitForImages(cardRef.current, 4500);
 
     try {
-      return await toPng(cardRef.current, {
+      const dataUrl = await toPng(cardRef.current, {
         cacheBust: true,
         pixelRatio: 2,
         backgroundColor: "#070A12",
         skipFonts: true,
       });
+      const res = await fetch(dataUrl);
+      return await res.blob();
     } catch (err) {
-      // try again without skipping fonts
-      return await toPng(cardRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        backgroundColor: "#070A12",
-        skipFonts: false,
-      });
+      try {
+        const dataUrl = await toPng(cardRef.current, {
+          cacheBust: true,
+          pixelRatio: 2,
+          backgroundColor: "#070A12",
+          skipFonts: false,
+        });
+        const res = await fetch(dataUrl);
+        return await res.blob();
+      } catch (err2) {
+        throw err2;
+      }
     }
   }
 
-  // Unified download helper
   function triggerDownload(blobOrUrl, filename) {
     if (!blobOrUrl) return;
     if (typeof blobOrUrl === "string") {
-      // data URL
       const a = document.createElement("a");
       a.href = blobOrUrl;
       a.download = filename;
@@ -288,117 +264,40 @@ export default function Page() {
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
-  // New: try multiple fallbacks so iOS users can obtain the combined image + background.
+  // New: download both composite card PNG (includes 7-pray background) and the background file
   async function downloadBoth() {
-    // require user to have filled the form (this project requires regionalRole explicitly)
     if (!isFormComplete) {
-      showToast("Please enter username, name and select a regional role first");
+      showToast("Please enter username, name and select a region first");
+      return;
+    }
+
+    if (!cardRef.current) {
+      showToast("Nothing to download");
       return;
     }
 
     setLoading(true);
     try {
-      // 1) get data URL (PNG) of the whole card (includes the <img src="/7-pray.png"> background)
-      const dataUrl = await generatePngDataUrl();
+      // composite PNG (card + background)
+      const compositeBlob = await generatePngBlob();
+      triggerDownload(compositeBlob, `bulk-access-card-${handle || "guest"}.png`);
 
-      // convert to blob for some APIs
-      const blob = await (await fetch(dataUrl)).blob();
-      const fileName = `bulk-access-card-${handle || "guest"}.png`;
-      const file = new File([blob], fileName, { type: blob.type });
-
-      // 2) Try navigator.canShare with files (Android / supporting browsers)
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({
-            files: [file],
-            title: "BULK Access Card",
-            text: "My BULK Access Card",
-          });
-          // still attempt to download bg as well
-          try {
-            const bgResp = await fetch("/7-pray.png");
-            if (bgResp.ok) {
-              const bgBlob = await bgResp.blob();
-              triggerDownload(bgBlob, "bulk-background-7-pray.png");
-            }
-          } catch {}
-          showToast("Shared via native share ✅");
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.warn("navigator.share(files) failed:", err);
-          // fallthrough to next method
-        }
-      }
-
-      // 3) Try clipboard image write (Safari iOS 16.4+, some Chromium builds)
-      if (navigator.clipboard && window.ClipboardItem) {
-        try {
-          const clipboardItem = new ClipboardItem({ [blob.type]: blob });
-          await navigator.clipboard.write([clipboardItem]);
-          // also download background so user has both
-          try {
-            const bgResp = await fetch("/7-pray.png");
-            if (bgResp.ok) {
-              const bgBlob = await bgResp.blob();
-              triggerDownload(bgBlob, "bulk-background-7-pray.png");
-            }
-          } catch {}
-          // open Twitter composer (optional) or simply instruct user to paste
-          showToast("Image copied to clipboard — paste into X/Twitter or save it.");
-          // open composer for convenience (user can paste into it)
-          const tweetUrl = "https://twitter.com/intent/tweet?text=" + encodeURIComponent("Just minted my BULK Access Card 🪪");
-          window.open(tweetUrl, "_blank", "noopener,noreferrer");
-          setLoading(false);
-          return;
-        } catch (err) {
-          console.warn("clipboard.write failed:", err);
-        }
-      }
-
-      // 4) iOS fallback: open the PNG data URL in a new tab so user can long-press to save
+      // fetch background image separately and download it
       try {
-        const newWin = window.open();
-        if (newWin) {
-          // open a minimal HTML page showing the full-size image
-          newWin.document.write(
-            `<html><head><title>Download</title></head><body style="margin:0;background:#000"><img src="${dataUrl}" style="width:100%;height:auto;display:block" /><p style="color:#fff;font-family:Arial,Helvetica,sans-serif;text-align:center;padding:12px">Long-press the image to save.</p></body></html>`
-          );
-          newWin.document.close();
-
-          // still download the background automatically
-          try {
-            const bgResp = await fetch("/7-pray.png");
-            if (bgResp.ok) {
-              const bgBlob = await bgResp.blob();
-              triggerDownload(bgBlob, "bulk-background-7-pray.png");
-            }
-          } catch {}
-          showToast("Opened image — long press to save on iOS");
-          setLoading(false);
-          return;
-        }
-      } catch (err) {
-        console.warn("open new tab fallback failed:", err);
-      }
-
-      // 5) Final fallback: trigger download using blob URL
-      triggerDownload(blob, fileName);
-
-      // download background too
-      try {
-        const bgResp = await fetch("/7-pray.png");
+        const bgResp = await fetch("/7-pray.png", { cache: "no-cache" });
         if (bgResp.ok) {
           const bgBlob = await bgResp.blob();
-          triggerDownload(bgBlob, "bulk-background-7-pray.png");
+          triggerDownload(bgBlob, `bulk-background-7-pray.png`);
+        } else {
+          console.warn("Background fetch failed:", bgResp.status);
         }
-      } catch (err) {
-        console.warn("background download fallback failed", err);
+      } catch (bgErr) {
+        console.warn("Background fetch error:", bgErr);
       }
 
       showToast("Downloaded card + background ✅");
-    } catch (err) {
-      console.error("downloadBoth failed", err);
+    } catch (e) {
+      console.error(e);
       showToast("Download failed ❌");
     } finally {
       setLoading(false);
@@ -422,8 +321,13 @@ export default function Page() {
     }
   }
 
-  // Simple text-only share to X (no image)
+  // Share without image attachment (text + link)
   async function shareToXWithoutImage() {
+    if (!isFormComplete) {
+      showToast("Please enter username, name and select a region first");
+      return;
+    }
+
     const badges = [
       statusRoles.verified ? "Verified" : null,
       statusRoles.bulker ? "Bulker" : null,
@@ -443,6 +347,7 @@ Get yours: https://bulk-six.vercel.app
 
     setLoading(true);
     try {
+      // navigator.share (mobile) prefers text + url — keep this simple
       if (navigator.share) {
         try {
           await navigator.share({
@@ -483,7 +388,7 @@ Get yours: https://bulk-six.vercel.app
 
   const finalName = manualName.trim() || xProfile?.name || "BULK Trader";
 
-  // require username + manual name + regional role
+  // enforce: username + manual name + regional role are required to show the access card
   const isFormComplete = Boolean(handle && manualName.trim() && regionalRole);
 
   return (
@@ -506,7 +411,6 @@ Get yours: https://bulk-six.vercel.app
         </header>
 
         <div className="grid gap-6 md:grid-cols-2">
-          {/* Controls */}
           <section className="rounded-3xl border border-white/10 bg-white/5 p-4 sm:p-6 backdrop-blur">
             <div className="space-y-5">
               <div>
@@ -547,7 +451,7 @@ Get yours: https://bulk-six.vercel.app
                   placeholder="e.g. Maharshi"
                   className="w-full rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-white outline-none focus:border-white/20"
                 />
-                <p className="mt-2 text-xs text-white/45">This must be filled and a regional role selected to show the access card preview.</p>
+                <p className="mt-2 text-xs text-white/45">This must be filled and a region selected to show the access card preview.</p>
               </div>
 
               <div>
@@ -593,7 +497,6 @@ Get yours: https://bulk-six.vercel.app
                     );
                   })}
                 </div>
-
                 <p className="mt-2 text-xs text-white/45">
                   Status roles are optional — you still must choose a regional role to preview the card.
                 </p>
@@ -634,7 +537,7 @@ Get yours: https://bulk-six.vercel.app
                   disabled={loading || !isFormComplete}
                   className="block w-full sm:w-auto rounded-2xl bg-white px-5 py-3 text-sm font-medium text-black hover:bg-white/90 disabled:opacity-60"
                 >
-                  {loading ? "Working..." : "Download Card + Background"}
+                  {loading ? "Exporting..." : "Download Card"}
                 </button>
 
                 <button
@@ -670,6 +573,8 @@ Get yours: https://bulk-six.vercel.app
                 className="relative w-full max-w-sm sm:max-w-md overflow-hidden rounded-[22px] border border-white/15 p-4 sm:p-6 shadow-2xl"
                 style={{ backgroundColor: "transparent" }}
               >
+                {/* Put the background image as an actual <img> (with crossOrigin)
+                    so html-to-image picks it up reliably. */}
                 <img
                   src="/7-pray.png"
                   alt="background"
@@ -678,8 +583,10 @@ Get yours: https://bulk-six.vercel.app
                   referrerPolicy="no-referrer"
                 />
 
+                {/* dark overlay so text is readable */}
                 <div className="pointer-events-none absolute inset-0 bg-black/40" />
 
+                {/* glow overlays */}
                 <div className="pointer-events-none absolute inset-0">
                   <div className="absolute -top-20 -left-12 h-40 w-40 rounded-full bg-fuchsia-500/20 blur-3xl" />
                   <div className="absolute -bottom-20 -right-12 h-48 w-48 rounded-full bg-cyan-400/15 blur-3xl" />
